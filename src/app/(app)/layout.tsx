@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { UserProvider } from "@/components/user-context";
-import { AppNav } from "@/components/app-nav";
+import { AppSidebar } from "@/components/app-sidebar";
 
 export default async function AppLayout({
   children,
@@ -13,8 +13,12 @@ export default async function AppLayout({
 
   return (
     <UserProvider user={user}>
-      <AppNav />
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8">{children}</main>
+      <div className="flex h-screen overflow-hidden">
+        <AppSidebar />
+        <main className="flex-1 overflow-y-auto">
+          <div className="mx-auto w-full max-w-5xl px-6 py-8">{children}</div>
+        </main>
+      </div>
     </UserProvider>
   );
 }

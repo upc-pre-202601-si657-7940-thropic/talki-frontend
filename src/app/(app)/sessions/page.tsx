@@ -39,19 +39,19 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-const SESSION_TYPES = [
-  { value: "quick_practice", label: "Práctica rápida" },
-  { value: "interview", label: "Entrevista" },
-  { value: "thesis_defense", label: "Defensa de tesis" },
-  { value: "scenario", label: "Escenario" },
-];
+const SESSION_TYPES: Record<string, string> = {
+  quick_practice: "Práctica rápida",
+  interview: "Entrevista",
+  thesis_defense: "Defensa de tesis",
+  scenario: "Escenario",
+};
 
 export default function SessionsPage() {
   const user = useUser();
   const [items, setItems] = useState<Session[] | null>(null);
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [type, setType] = useState("quick_practice");
+  const [type, setType] = useState("");
 
   async function load() {
     try {
@@ -71,6 +71,10 @@ export default function SessionsPage() {
   async function onCreate(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
+    if (!type) {
+      toast.error("Elegí un tipo de sesión");
+      return;
+    }
     setCreating(true);
     try {
       await sessions.create({
@@ -80,6 +84,7 @@ export default function SessionsPage() {
       });
       toast.success("Sesión creada");
       setOpen(false);
+      setType("");
       await load();
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "Error al crear sesión";
@@ -118,14 +123,18 @@ export default function SessionsPage() {
                 </div>
                 <div className="space-y-2">
                   <Label>Tipo</Label>
-                  <Select value={type} onValueChange={(v) => setType(v ?? "quick_practice")}>
-                    <SelectTrigger>
-                      <SelectValue />
+                  <Select
+                    items={SESSION_TYPES}
+                    value={type}
+                    onValueChange={(v) => setType(v ?? "")}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Elegir opción" />
                     </SelectTrigger>
                     <SelectContent>
-                      {SESSION_TYPES.map((t) => (
-                        <SelectItem key={t.value} value={t.value}>
-                          {t.label}
+                      {Object.entries(SESSION_TYPES).map(([value, label]) => (
+                        <SelectItem key={value} value={value}>
+                          {label}
                         </SelectItem>
                       ))}
                     </SelectContent>

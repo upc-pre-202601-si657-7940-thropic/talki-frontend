@@ -3,7 +3,7 @@
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowLeft, CheckCircle2, Loader2, MessageSquarePlus } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Info, Loader2, MessageSquarePlus } from "lucide-react";
 import { sessions } from "@/lib/api/services";
 import { ApiError } from "@/lib/api/client";
 import type { Feedback, Session } from "@/lib/api/types";
@@ -63,7 +63,13 @@ export default function SessionDetailPage({
       setSession(updated);
       toast.success("Sesión finalizada, análisis en proceso");
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "No se pudo finalizar";
+      // El backend solo permite finalizar sesiones en estado RECORDING.
+      const msg =
+        err instanceof ApiError && err.status >= 500
+          ? "El backend solo finaliza sesiones en estado RECORDING (esta está en otro estado)."
+          : err instanceof ApiError
+            ? err.message
+            : "No se pudo finalizar";
       toast.error(msg);
     } finally {
       setFinalizing(false);
@@ -104,18 +110,20 @@ export default function SessionDetailPage({
     return (
       <div className="space-y-4">
         <p className="text-muted-foreground">No se encontró la sesión.</p>
-        <Button render={<Link href="/sessions" />} variant="outline">
+        <Button render={<Link href="/sessions" />} nativeButton={false} variant="outline">
           <ArrowLeft className="size-4" /> Volver
         </Button>
       </div>
     );
   }
 
-  const canFinalize = session.status === "RECORDING" || session.status === "DRAFT";
+  // El backend exige estado RECORDING para finalizar (DRAFT no se puede aún).
+  const canFinalize = session.status === "RECORDING";
+  const isDraft = session.status === "DRAFT";
 
   return (
     <div className="space-y-6">
-      <Button render={<Link href="/sessions" />} variant="ghost" size="sm" className="-ml-2">
+      <Button render={<Link href="/sessions" />} nativeButton={false} variant="ghost" size="sm" className="-ml-2">
         <ArrowLeft className="size-4" /> Sesiones
       </Button>
 
@@ -151,6 +159,14 @@ export default function SessionDetailPage({
               )}
               Finalizar y analizar
             </Button>
+          )}
+          {isDraft && (
+            <p className="flex items-start gap-2 rounded-md border border-dashed bg-muted/40 p-3 text-sm text-muted-foreground">
+              <Info className="mt-0.5 size-4 shrink-0" />
+              Esta sesión está en <strong className="font-medium">borrador</strong>. El
+              flujo de análisis real (muletillas → puntaje → progreso) se dispara desde la
+              página <Link href="/coach" className="font-medium text-foreground underline underline-offset-4">Coach</Link>.
+            </p>
           )}
         </CardContent>
       </Card>
