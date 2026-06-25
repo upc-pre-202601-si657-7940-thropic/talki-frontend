@@ -1,4 +1,5 @@
 import { authApi, gateway } from "@/lib/api/client";
+import type { ServiceName } from "@/lib/config";
 import type {
   AuthUser,
   CoachModes,
@@ -81,8 +82,20 @@ export const gamification = {
     gateway<LeaderboardEntry[]>("gamification", "GET", "v1/gamification/leaderboard"),
 };
 
-// ---------------- Health (8087 / 8088) ----------------
+// ---------------- Health (actuator estándar en los 8 microservicios) ----------------
+// Los servicios de análisis son event-driven (no exponen REST de dominio): su
+// estado se consulta por el endpoint estándar `/actuator/health` —habilitado en
+// los 8 microservicios desde el Sprint 2—, que devuelve `{ "status": "UP" }`. La
+// etiqueta del servicio se sintetiza en el cliente porque actuator no la incluye.
+async function actuatorHealth(
+  service: ServiceName,
+  label: string,
+): Promise<ServiceHealth> {
+  const res = await gateway<{ status?: string }>(service, "GET", "actuator/health");
+  return { service: label, status: res.status ?? "UNKNOWN" };
+}
+
 export const health = {
-  filler: () => gateway<ServiceHealth>("filler", "GET", "health"),
-  scoring: () => gateway<ServiceHealth>("scoring", "GET", "v1/scores/health"),
+  filler: () => actuatorHealth("filler", "filler-detection-service"),
+  scoring: () => actuatorHealth("scoring", "scoring-service"),
 };
