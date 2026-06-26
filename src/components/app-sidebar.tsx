@@ -14,7 +14,9 @@ import {
   Plus,
   Loader2,
   MessageSquare,
+  Video,
 } from "lucide-react";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { auth, sessions as sessionsApi } from "@/lib/api/services";
 import type { Session } from "@/lib/api/types";
 import { useUser } from "@/components/user-context";
@@ -89,27 +91,33 @@ export function AppSidebar() {
   const initial = user.email.charAt(0).toUpperCase();
 
   return (
-    <aside className="flex h-screen w-64 shrink-0 flex-col border-r bg-muted/30">
+    <aside className="flex h-screen w-64 shrink-0 flex-col border-r bg-sidebar border-sidebar-border">
       {/* Marca */}
-      <div className="flex h-14 items-center gap-2 px-4">
-        <span className="grid size-7 place-items-center rounded-md bg-primary text-sm font-bold text-primary-foreground">
-          T
-        </span>
-        <span className="font-semibold">Talki</span>
+      <div className="flex h-14 items-center justify-between border-b border-sidebar-border px-4">
+        <div className="flex items-center gap-2.5">
+          <div className="flex items-center justify-center size-9 rounded-xl bg-primary/10">
+            <Video className="size-4 text-primary" />
+          </div>
+          <span className="text-lg font-semibold">Talki</span>
+        </div>
+        <ThemeToggle />
       </div>
 
       {/* Acción principal */}
-      <div className="px-3">
+      <div className="px-3 pt-4">
         <Link
           href="/sessions"
-          className="flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-sm font-medium transition-colors hover:bg-muted"
+          className="flex items-center gap-2 rounded-lg bg-primary px-3 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
         >
           <Plus className="size-4" /> Nueva sesión
         </Link>
       </div>
 
+      {/* Separador */}
+      <div className="mx-3 my-3 h-px bg-sidebar-border" />
+
       {/* Navegación */}
-      <nav className="mt-3 space-y-1 px-3">
+      <nav className="space-y-0.5 px-3">
         {LINKS.map(({ href, label, icon: Icon }) => {
           const active =
             pathname === href ||
@@ -122,8 +130,8 @@ export function AppSidebar() {
               className={cn(
                 "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors",
                 active
-                  ? "bg-muted font-medium text-foreground"
-                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                  ? "bg-primary/10 font-medium text-primary"
+                  : "text-muted-foreground hover:bg-secondary hover:text-foreground",
               )}
             >
               <Icon className="size-4" />
@@ -156,8 +164,8 @@ export function AppSidebar() {
                   className={cn(
                     "flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors",
                     active
-                      ? "bg-muted font-medium text-foreground"
-                      : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                      ? "bg-primary/10 font-medium text-primary"
+                      : "text-muted-foreground hover:bg-secondary hover:text-foreground",
                   )}
                 >
                   <MessageSquare className="size-3.5 shrink-0" />
@@ -170,7 +178,7 @@ export function AppSidebar() {
       </div>
 
       {/* Cuenta */}
-      <div ref={accountRef} className="relative border-t p-3">
+      <div ref={accountRef} className="relative border-t border-sidebar-border p-3">
         {menuOpen && (
           <div className="absolute right-3 bottom-full left-3 mb-1 overflow-hidden rounded-lg border bg-popover p-1 text-popover-foreground shadow-md">
             <p className="truncate px-2 py-1 text-xs font-medium text-muted-foreground">
