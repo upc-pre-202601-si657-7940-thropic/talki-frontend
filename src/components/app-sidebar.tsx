@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -19,14 +19,6 @@ import { auth, sessions as sessionsApi } from "@/lib/api/services";
 import type { Session } from "@/lib/api/types";
 import { useUser } from "@/components/user-context";
 import { cn } from "@/lib/utils";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 
 const LINKS = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -41,6 +33,27 @@ export function AppSidebar() {
   const router = useRouter();
   const [recent, setRecent] = useState<Session[] | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const accountRef = useRef<HTMLDivElement>(null);
+
+  // Cerrar el menú de cuenta al hacer clic fuera o presionar Escape.
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onPointerDown(e: MouseEvent) {
+      if (accountRef.current && !accountRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen]);
 
   useEffect(() => {
     let alive = true;
@@ -157,38 +170,44 @@ export function AppSidebar() {
       </div>
 
       {/* Cuenta */}
-      <div className="border-t p-3">
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <button
-                type="button"
-                className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted"
-              />
-            }
-          >
-            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-sm font-semibold text-primary-foreground">
-              {initial}
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-medium">{user.email}</span>
-              <span className="block text-xs text-muted-foreground">Mi cuenta</span>
-            </span>
-            <Settings className="size-4 shrink-0 text-muted-foreground" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-56">
-            <DropdownMenuLabel className="truncate">{user.email}</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onClick={handleLogout} disabled={loggingOut}>
+      <div ref={accountRef} className="relative border-t p-3">
+        {menuOpen && (
+          <div className="absolute right-3 bottom-full left-3 mb-1 overflow-hidden rounded-lg border bg-popover p-1 text-popover-foreground shadow-md">
+            <p className="truncate px-2 py-1 text-xs font-medium text-muted-foreground">
+              {user.email}
+            </p>
+            <div className="my-1 h-px bg-border" />
+            <button
+              type="button"
+              onClick={handleLogout}
+              disabled={loggingOut}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-destructive transition-colors hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-50"
+            >
               {loggingOut ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
                 <LogOut className="size-4" />
               )}
               Cerrar sesión
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+            </button>
+          </div>
+        )}
+        <button
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen((open) => !open)}
+          className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted"
+        >
+          <span className="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-sm font-semibold text-primary-foreground">
+            {initial}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium">{user.email}</span>
+            <span className="block text-xs text-muted-foreground">Mi cuenta</span>
+          </span>
+          <Settings className="size-4 shrink-0 text-muted-foreground" />
+        </button>
       </div>
     </aside>
   );
