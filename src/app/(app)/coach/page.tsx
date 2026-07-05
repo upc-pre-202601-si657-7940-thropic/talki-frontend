@@ -6,6 +6,7 @@ import { Loader2, Mic, Send } from "lucide-react";
 import { coach } from "@/lib/api/services";
 import { ApiError } from "@/lib/api/client";
 import type { CoachModes } from "@/lib/api/types";
+import { LiveRecorder } from "@/components/live-recorder";
 import { useUser } from "@/components/user-context";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -111,10 +112,28 @@ export default function CoachPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Finalizar sesión en vivo</CardTitle>
+          <CardTitle className="text-base">Conversación en vivo</CardTitle>
           <CardDescription>
-            Envía la transcripción y métricas para disparar el análisis de muletillas y
-            puntaje.
+            Usá el grabador flotante (abajo a la derecha) para conversar por voz con el
+            coach de IA en modo <strong>{MODE_LABEL[selected] ?? selected}</strong>. Al
+            detener, tu intervención se transcribe y se envía sola a análisis.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="text-sm text-muted-foreground">
+          Requiere permitir cámara y micrófono. Si el coach de IA no está disponible, se
+          usa la transcripción local del navegador.
+        </CardContent>
+      </Card>
+
+      {/* Grabador flotante con conversación de IA + análisis automático. */}
+      <LiveRecorder mode={selected} />
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Envío manual (alternativa)</CardTitle>
+          <CardDescription>
+            Si preferís, escribí la transcripción y métricas a mano para disparar el
+            análisis de muletillas y puntaje.
           </CardDescription>
         </CardHeader>
         <CardContent>

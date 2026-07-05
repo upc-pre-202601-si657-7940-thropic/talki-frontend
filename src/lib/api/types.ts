@@ -59,6 +59,15 @@ export interface CoachModes {
   description: string;
 }
 
+/** Respuesta de POST /v1/coach/live-token: credenciales para abrir Gemini Live. */
+export interface LiveTokenResponse {
+  token: string;
+  model: string;
+  expiresAt: string;
+  mode: string;
+  maxDurationMinutes: number;
+}
+
 export interface FinalizeLiveInput {
   userId: string;
   mode: string;

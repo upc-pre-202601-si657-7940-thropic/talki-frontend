@@ -8,6 +8,7 @@ import type {
   Feedback,
   FinalizeLiveInput,
   LeaderboardEntry,
+  LiveTokenResponse,
   LoginInput,
   ProgressDashboard,
   RegisterInput,
@@ -58,6 +59,11 @@ export const sessions = {
 // ---------------- Live coach (8083) ----------------
 export const coach = {
   modes: () => gateway<CoachModes>("coach", "GET", "v1/coach/modes"),
+
+  liveToken: (mode: string, scenarioId?: string) =>
+    gateway<LiveTokenResponse>("coach", "POST", "v1/coach/live-token", {
+      query: { mode, scenarioId },
+    }),
 
   finalize: (sessionId: string, input: FinalizeLiveInput) =>
     gateway("coach", "POST", `v1/coach/${sessionId}/finalize`, {

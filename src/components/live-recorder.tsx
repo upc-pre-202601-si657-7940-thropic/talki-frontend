@@ -1,8 +1,23 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Mic, MicOff, CameraOff, ChevronDown, ChevronUp, RotateCcw } from "lucide-react";
+import { toast } from "sonner";
+import {
+  Mic,
+  MicOff,
+  CameraOff,
+  ChevronDown,
+  ChevronUp,
+  RotateCcw,
+  Loader2,
+  Sparkles,
+  Send,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
+import { coach } from "@/lib/api/services";
+import { ApiError } from "@/lib/api/client";
+import { useUser } from "@/components/user-context";
+import { useGeminiLive } from "@/lib/coach/useGeminiLive";
 
 type State = "idle" | "recording" | "stopped";
 
@@ -12,7 +27,10 @@ function formatTime(s: number) {
   return `${m}:${sec}`;
 }
 
-export function LiveRecorder() {
+export function LiveRecorder({ mode = "quick_practice" }: { mode?: string }) {
+  const user = useUser();
+  const live = useGeminiLive();
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -26,8 +44,13 @@ export function LiveRecorder() {
   const [elapsed, setElapsed] = useState(0);
   const [minimized, setMinimized] = useState(false);
   const [hasCamera, setHasCamera] = useState(true);
+  // true = conversación con Gemini; false = transcripción local (Web Speech).
+  const [aiActive, setAiActive] = useState(false);
+  const [sending, setSending] = useState(false);
 
-  const wordCount = transcript.trim().split(/\s+/).filter(Boolean).length;
+  // Texto del usuario según la fuente activa (Gemini o Web Speech).
+  const userText = aiActive ? live.userTranscript : transcript;
+  const wordCount = userText.trim().split(/\s+/).filter(Boolean).length;
   const wpm = elapsed > 10 ? Math.round((wordCount / elapsed) * 60) : 0;
 
   const stopTimer = useCallback(() => {
@@ -35,6 +58,38 @@ export function LiveRecorder() {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
+  }, []);
+
+  // Fallback local: transcripción del usuario con la Web Speech API del navegador.
+  const startWebSpeech = useCallback(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) return;
+    const recognition = new SR();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "es-ES";
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    recognition.onresult = (event: any) => {
+      let finalChunk = "";
+      let interimChunk = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const r = event.results[i];
+        if (r.isFinal) finalChunk += r[0].transcript;
+        else interimChunk += r[0].transcript;
+      }
+      if (finalChunk) {
+        transcriptRef.current += finalChunk + " ";
+        setTranscript(transcriptRef.current);
+      }
+      setInterim(interimChunk);
+    };
+    recognition.onend = () => {
+      if (streamRef.current) recognition.start();
+    };
+    recognition.start();
+    recognitionRef.current = recognition;
   }, []);
 
   async function startRecording() {
@@ -47,12 +102,9 @@ export function LiveRecorder() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
+      if (videoRef.current) videoRef.current.srcObject = stream;
       setHasCamera(true);
     } catch {
-      // Solo audio si no hay cámara
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         streamRef.current = stream;
@@ -62,58 +114,69 @@ export function LiveRecorder() {
       }
     }
 
-    // Web Speech API
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SR) {
-      const recognition = new SR();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = "es-ES";
+    // Intentar conversación real con Gemini; si no hay API key, caer a Web Speech.
+    const connected = await live.start(mode, { stream: streamRef.current ?? undefined });
+    setAiActive(connected);
+    if (!connected) startWebSpeech();
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      recognition.onresult = (event: any) => {
-        let finalChunk = "";
-        let interimChunk = "";
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const r = event.results[i];
-          if (r.isFinal) {
-            finalChunk += r[0].transcript;
-          } else {
-            interimChunk += r[0].transcript;
-          }
-        }
-        if (finalChunk) {
-          transcriptRef.current += finalChunk + " ";
-          setTranscript(transcriptRef.current);
-        }
-        setInterim(interimChunk);
-      };
-
-      recognition.onend = () => {
-        // Reiniciar automáticamente si aún estamos grabando
-        if (streamRef.current) {
-          recognition.start();
-        }
-      };
-
-      recognition.start();
-      recognitionRef.current = recognition;
-    }
-
-    // Timer
     timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
     setState("recording");
   }
 
-  function stopRecording() {
+  async function stopRecording() {
+    stopTimer();
+
+    // Cierra la fuente de transcripción y obtiene el texto final.
+    let finalTranscript = transcriptRef.current.trim();
+    let finalWpm = wpm;
+    let finalDuration = elapsed;
+
+    if (aiActive) {
+      const summary = await live.stop();
+      if (summary) {
+        finalTranscript = summary.transcript || finalTranscript;
+        finalWpm = summary.wordsPerMinute || finalWpm;
+        finalDuration = summary.durationSeconds || finalDuration;
+      }
+    } else {
+      recognitionRef.current?.stop();
+      recognitionRef.current = null;
+    }
+
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
-    recognitionRef.current?.stop();
-    recognitionRef.current = null;
     setInterim("");
-    stopTimer();
     setState("stopped");
+
+    if (!finalTranscript) {
+      toast.warning("No se detectó voz. Intenta de nuevo hablando al micrófono.");
+      return;
+    }
+
+    // Dispara el pipeline de análisis (muletillas → scoring → progreso).
+    setSending(true);
+    try {
+      const sessionId =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `sess-${Date.now()}`;
+      await coach.finalize(sessionId, {
+        userId: user.userId,
+        mode,
+        transcriptGemini: finalTranscript,
+        wordsPerMinute: finalWpm,
+        durationSeconds: finalDuration,
+        silenceRatio: 0,
+        volumeRmsAvg: 0,
+        academicSegment: "ciclos_6_10",
+      });
+      toast.success("Sesión enviada a análisis (muletillas → scoring → progreso)");
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "No se pudo enviar la sesión a análisis";
+      toast.error(msg);
+    } finally {
+      setSending(false);
+    }
   }
 
   function reset() {
@@ -121,6 +184,7 @@ export function LiveRecorder() {
     setTranscript("");
     setInterim("");
     setElapsed(0);
+    setAiActive(false);
     setState("idle");
   }
 
@@ -147,6 +211,11 @@ export function LiveRecorder() {
                 ? `REC · ${formatTime(elapsed)}`
                 : `Grabado · ${formatTime(elapsed)}`}
           </span>
+          {state === "recording" && aiActive && (
+            <span className="flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+              <Sparkles className="size-2.5" /> IA
+            </span>
+          )}
         </div>
         <button
           type="button"
@@ -182,18 +251,26 @@ export function LiveRecorder() {
           </div>
 
           {/* Transcripción */}
-          <div className="min-h-[72px] max-h-36 overflow-y-auto p-3 text-sm leading-relaxed">
-            {transcript || interim ? (
-              <>
-                <span className="text-foreground">{transcript}</span>
+          <div className="min-h-[72px] max-h-40 overflow-y-auto p-3 text-sm leading-relaxed space-y-2">
+            {userText || interim ? (
+              <p>
+                <span className="text-foreground">{userText}</span>
                 <span className="text-muted-foreground italic">{interim}</span>
-              </>
+              </p>
             ) : (
               <span className="text-xs text-muted-foreground italic">
                 {state === "idle"
-                  ? "Presioná grabar para iniciar la transcripción en vivo…"
+                  ? "Presioná grabar para conversar con el coach…"
                   : "Escuchando…"}
               </span>
+            )}
+            {aiActive && live.modelTranscript && (
+              <p className="rounded-md bg-primary/5 p-2 text-[13px]">
+                <span className="mb-0.5 flex items-center gap-1 text-[10px] font-medium text-primary">
+                  <Sparkles className="size-2.5" /> Coach IA
+                </span>
+                <span className="text-foreground">{live.modelTranscript}</span>
+              </p>
             )}
           </div>
 
@@ -202,6 +279,11 @@ export function LiveRecorder() {
             <div className="flex items-center gap-3 px-3 pb-2 text-xs text-muted-foreground">
               <span>{wordCount} palabras</span>
               {wpm > 0 && <span>{wpm} PPM</span>}
+              {sending && (
+                <span className="ml-auto flex items-center gap-1">
+                  <Loader2 className="size-3 animate-spin" /> enviando…
+                </span>
+              )}
             </div>
           )}
 
@@ -220,11 +302,20 @@ export function LiveRecorder() {
             {state !== "recording" ? (
               <button
                 type="button"
+                disabled={live.status === "connecting"}
                 onClick={startRecording}
-                className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors"
+                className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-60"
               >
-                <Mic className="size-4" />
-                {state === "stopped" ? "Grabar de nuevo" : "Grabar"}
+                {live.status === "connecting" ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Mic className="size-4" />
+                )}
+                {live.status === "connecting"
+                  ? "Conectando…"
+                  : state === "stopped"
+                    ? "Grabar de nuevo"
+                    : "Grabar"}
               </button>
             ) : (
               <button
@@ -232,7 +323,7 @@ export function LiveRecorder() {
                 onClick={stopRecording}
                 className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-destructive px-3 py-2 text-sm font-semibold text-destructive-foreground hover:bg-destructive/90 transition-colors"
               >
-                <MicOff className="size-4" />
+                {sending ? <Send className="size-4" /> : <MicOff className="size-4" />}
                 Detener
               </button>
             )}
