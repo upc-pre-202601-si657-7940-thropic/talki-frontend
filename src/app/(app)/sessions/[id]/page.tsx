@@ -32,6 +32,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import {
+  getSpeechRecognition,
+  isWebSpeechAvailable,
+  mergeInterimTranscript,
+  speechErrorMessage,
+} from "@/lib/speech/webSpeech";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -52,6 +58,7 @@ function CameraPanel() {
   const recognitionRef = useRef<any>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const transcriptAccRef = useRef("");
+  const interimRef = useRef("");
 
   const [recState, setRecState] = useState<RecState>("idle");
   const [transcript, setTranscript] = useState("");
@@ -92,32 +99,38 @@ function CameraPanel() {
   }, [stopTimer]);
 
   async function startRecording() {
+    if (!isWebSpeechAvailable()) {
+      toast.error("La transcripción en vivo requiere Chrome o Edge (Web Speech API).");
+      return;
+    }
+
     transcriptAccRef.current = "";
+    interimRef.current = "";
     setTranscript("");
     setInterim("");
     setElapsed(0);
 
-    // Pedir micrófono si no lo tenemos
-    if (streamRef.current) {
-      // Agregar pista de audio al stream existente
+    // Cámara + micrófono juntos (evita conflictos con Web Speech).
+    try {
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      streamRef.current = stream;
+      if (videoRef.current) videoRef.current.srcObject = stream;
+      setCamReady(true);
+      setCamError(false);
+    } catch {
       try {
-        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        audioStream.getAudioTracks().forEach((t) => streamRef.current!.addTrack(t));
-      } catch { /* sin micrófono, solo video */ }
-    } else {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         streamRef.current = stream;
-        if (videoRef.current) videoRef.current.srcObject = stream;
-        setCamReady(true);
+        setCamReady(false);
+        setCamError(false);
       } catch {
-        setCamError(true);
+        toast.error("No se pudo acceder al micrófono. Revisá los permisos del navegador.");
+        return;
       }
     }
 
-    // Web Speech API
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const SR = getSpeechRecognition();
     if (SR) {
       const recognition = new SR();
       recognition.continuous = true;
@@ -135,11 +148,20 @@ function CameraPanel() {
         if (finalChunk) {
           transcriptAccRef.current += finalChunk + " ";
           setTranscript(transcriptAccRef.current);
+          interimRef.current = "";
+          setInterim("");
+        } else {
+          interimRef.current = interimChunk;
+          setInterim(interimChunk);
         }
-        setInterim(interimChunk);
+      };
+      recognition.onerror = (event) => {
+        if (event.error !== "aborted") {
+          toast.warning(speechErrorMessage(event.error));
+        }
       };
       recognition.onend = () => {
-        if (streamRef.current) recognition.start();
+        if (recognitionRef.current === recognition) recognition.start();
       };
       recognition.start();
       recognitionRef.current = recognition;
@@ -150,13 +172,25 @@ function CameraPanel() {
   }
 
   function stopRecording() {
-    // Detener solo pistas de audio, mantener video preview
-    streamRef.current?.getAudioTracks().forEach((t) => t.stop());
+    const merged = mergeInterimTranscript(transcriptAccRef.current, interimRef.current);
+    if (merged !== transcriptAccRef.current) {
+      transcriptAccRef.current = merged;
+      setTranscript(merged);
+    }
+
     recognitionRef.current?.stop();
     recognitionRef.current = null;
+    interimRef.current = "";
     setInterim("");
+
+    // Detener solo audio; el preview de video sigue en idle/stopped.
+    streamRef.current?.getAudioTracks().forEach((t) => t.stop());
     stopTimer();
     setRecState("stopped");
+
+    if (!merged.trim()) {
+      toast.warning("No se detectó voz. Hablá unos segundos antes de detener.");
+    }
   }
 
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -286,7 +320,9 @@ function CameraPanel() {
                 ? "Iniciá la grabación para ver la transcripción en tiempo real…"
                 : recState === "recording"
                   ? "Hablá y verás el texto aparecer acá…"
-                  : "Grabación detenida. La transcripción quedó guardada arriba."}
+                  : transcript
+                    ? "Grabación detenida."
+                    : "No se captó texto. Probá de nuevo en Chrome/Edge, hablando 5–10 s."}
             </p>
           )}
         </div>

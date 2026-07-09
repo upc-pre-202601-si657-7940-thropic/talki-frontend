@@ -18,6 +18,12 @@ import { coach } from "@/lib/api/services";
 import { ApiError } from "@/lib/api/client";
 import { useUser } from "@/components/user-context";
 import { useGeminiLive } from "@/lib/coach/useGeminiLive";
+import {
+  getSpeechRecognition,
+  isWebSpeechAvailable,
+  mergeInterimTranscript,
+  speechErrorMessage,
+} from "@/lib/speech/webSpeech";
 
 type State = "idle" | "recording" | "stopped";
 
@@ -37,6 +43,7 @@ export function LiveRecorder({ mode = "quick_practice" }: { mode?: string }) {
   const recognitionRef = useRef<any>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const transcriptRef = useRef("");
+  const interimRef = useRef("");
 
   const [state, setState] = useState<State>("idle");
   const [transcript, setTranscript] = useState("");
@@ -62,9 +69,11 @@ export function LiveRecorder({ mode = "quick_practice" }: { mode?: string }) {
 
   // Fallback local: transcripción del usuario con la Web Speech API del navegador.
   const startWebSpeech = useCallback(() => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) return;
+    const SR = getSpeechRecognition();
+    if (!SR) {
+      toast.error("La transcripción local requiere Chrome o Edge.");
+      return;
+    }
     const recognition = new SR();
     recognition.continuous = true;
     recognition.interimResults = true;
@@ -82,11 +91,20 @@ export function LiveRecorder({ mode = "quick_practice" }: { mode?: string }) {
       if (finalChunk) {
         transcriptRef.current += finalChunk + " ";
         setTranscript(transcriptRef.current);
+        interimRef.current = "";
+        setInterim("");
+      } else {
+        interimRef.current = interimChunk;
+        setInterim(interimChunk);
       }
-      setInterim(interimChunk);
+    };
+    recognition.onerror = (event) => {
+      if (event.error !== "aborted") {
+        toast.warning(speechErrorMessage(event.error));
+      }
     };
     recognition.onend = () => {
-      if (streamRef.current) recognition.start();
+      if (recognitionRef.current === recognition) recognition.start();
     };
     recognition.start();
     recognitionRef.current = recognition;
@@ -117,7 +135,13 @@ export function LiveRecorder({ mode = "quick_practice" }: { mode?: string }) {
     // Intentar conversación real con Gemini; si no hay API key, caer a Web Speech.
     const connected = await live.start(mode, { stream: streamRef.current ?? undefined });
     setAiActive(connected);
-    if (!connected) startWebSpeech();
+    if (!connected) {
+      if (!isWebSpeechAvailable()) {
+        toast.error("Coach IA no disponible y este navegador no soporta transcripción local.");
+      } else {
+        startWebSpeech();
+      }
+    }
 
     timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
     setState("recording");
@@ -139,8 +163,15 @@ export function LiveRecorder({ mode = "quick_practice" }: { mode?: string }) {
         finalDuration = summary.durationSeconds || finalDuration;
       }
     } else {
+      const merged = mergeInterimTranscript(transcriptRef.current, interimRef.current);
+      if (merged !== transcriptRef.current) {
+        transcriptRef.current = merged;
+        setTranscript(merged);
+        finalTranscript = merged.trim();
+      }
       recognitionRef.current?.stop();
       recognitionRef.current = null;
+      interimRef.current = "";
     }
 
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -181,6 +212,7 @@ export function LiveRecorder({ mode = "quick_practice" }: { mode?: string }) {
 
   function reset() {
     transcriptRef.current = "";
+    interimRef.current = "";
     setTranscript("");
     setInterim("");
     setElapsed(0);
