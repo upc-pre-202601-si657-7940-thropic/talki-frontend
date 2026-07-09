@@ -8,22 +8,25 @@ import {
   CheckCircle2,
   Info,
   Loader2,
-  MessageSquarePlus,
   Mic,
   MicOff,
+  Sparkles,
   Video,
   VideoOff,
 } from "lucide-react";
-import { sessions } from "@/lib/api/services";
+import { coach, sessions } from "@/lib/api/services";
 import { ApiError } from "@/lib/api/client";
 import type { Feedback, Session } from "@/lib/api/types";
+import {
+  AI_FEEDBACK_LABELS,
+  analyzePractice,
+  isAiFeedbackType,
+} from "@/lib/coach/aiFeedback";
 import { formatDateTime, STATUS_LABEL, STATUS_VARIANT } from "@/lib/format";
+import { useUser } from "@/components/user-context";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Separator } from "@/components/ui/separator";
 import {
   Card,
   CardContent,
@@ -51,7 +54,11 @@ function formatTime(s: number) {
 
 type RecState = "idle" | "recording" | "stopped";
 
-function CameraPanel() {
+function CameraPanel({
+  onPracticeComplete,
+}: {
+  onPracticeComplete: (transcript: string, durationSeconds: number) => Promise<void>;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -66,6 +73,7 @@ function CameraPanel() {
   const [elapsed, setElapsed] = useState(0);
   const [camReady, setCamReady] = useState(false);
   const [camError, setCamError] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
 
   const wordCount = transcript.trim().split(/\s+/).filter(Boolean).length;
   const wpm = elapsed > 10 ? Math.round((wordCount / elapsed) * 60) : 0;
@@ -171,7 +179,7 @@ function CameraPanel() {
     setRecState("recording");
   }
 
-  function stopRecording() {
+  async function stopRecording() {
     const merged = mergeInterimTranscript(transcriptAccRef.current, interimRef.current);
     if (merged !== transcriptAccRef.current) {
       transcriptAccRef.current = merged;
@@ -183,13 +191,22 @@ function CameraPanel() {
     interimRef.current = "";
     setInterim("");
 
-    // Detener solo audio; el preview de video sigue en idle/stopped.
     streamRef.current?.getAudioTracks().forEach((t) => t.stop());
+    const duration = elapsed;
     stopTimer();
     setRecState("stopped");
 
-    if (!merged.trim()) {
+    const text = merged.trim();
+    if (!text) {
       toast.warning("No se detectó voz. Hablá unos segundos antes de detener.");
+      return;
+    }
+
+    setAnalyzing(true);
+    try {
+      await onPracticeComplete(text, duration);
+    } finally {
+      setAnalyzing(false);
     }
   }
 
@@ -287,6 +304,11 @@ function CameraPanel() {
               <span>{wordCount} palabras</span>
               {wpm > 0 && <span>{wpm} PPM</span>}
               <span>{formatTime(elapsed)}</span>
+              {analyzing && (
+                <span className="ml-auto flex items-center gap-1 text-primary">
+                  <Loader2 className="size-3 animate-spin" /> analizando…
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -354,11 +376,12 @@ export default function SessionDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
+  const user = useUser();
   const [session, setSession] = useState<Session | null>(null);
   const [feedbacks, setFeedbacks] = useState<Feedback[]>([]);
   const [loading, setLoading] = useState(true);
   const [finalizing, setFinalizing] = useState(false);
-  const [savingFb, setSavingFb] = useState(false);
+  const [overallScore, setOverallScore] = useState<number | null>(null);
 
   async function load() {
     setLoading(true);
@@ -382,6 +405,15 @@ export default function SessionDetailPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  useEffect(() => {
+    const ai = feedbacks.filter((f) => isAiFeedbackType(f.feedbackType));
+    const summary = ai.find((f) => f.feedbackType === "ai_resumen");
+    if (summary) {
+      const match = summary.content.match(/\((\d+)\/100\)/);
+      if (match) setOverallScore(Number(match[1]));
+    }
+  }, [feedbacks]);
+
   async function onFinalize() {
     setFinalizing(true);
     try {
@@ -401,24 +433,44 @@ export default function SessionDetailPage({
     }
   }
 
-  async function onAddFeedback(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const formEl = e.currentTarget;
-    const form = new FormData(formEl);
-    setSavingFb(true);
-    try {
-      const fb = await sessions.addFeedback(id, {
-        feedbackType: String(form.get("feedbackType") || "general"),
-        content: String(form.get("content") || ""),
+  async function handlePracticeComplete(transcript: string, durationSeconds: number) {
+    const analysis = analyzePractice(transcript, durationSeconds);
+    setOverallScore(analysis.scores.overall);
+
+    const pipelineId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `sess-${id}-${Date.now()}`;
+
+    void coach
+      .finalize(pipelineId, {
+        userId: user.userId,
+        mode: "quick_practice",
+        transcriptGemini: transcript,
+        wordsPerMinute: analysis.wordsPerMinute,
+        durationSeconds: analysis.durationSeconds,
+        silenceRatio: 0,
+        volumeRmsAvg: 0,
+        academicSegment: "ciclos_6_10",
+      })
+      .catch(() => {
+        /* pipeline async; el feedback local ya se muestra */
       });
-      setFeedbacks((prev) => [...prev, fb]);
-      formEl.reset();
-      toast.success("Feedback agregado");
+
+    try {
+      const saved: Feedback[] = [];
+      for (const item of analysis.items) {
+        const fb = await sessions.addFeedback(id, {
+          feedbackType: item.feedbackType,
+          content: item.content,
+        });
+        saved.push(fb);
+      }
+      setFeedbacks((prev) => [...prev.filter((f) => !isAiFeedbackType(f.feedbackType)), ...saved]);
+      toast.success("Feedback del coach IA listo");
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "No se pudo guardar el feedback";
       toast.error(msg);
-    } finally {
-      setSavingFb(false);
     }
   }
 
@@ -444,6 +496,7 @@ export default function SessionDetailPage({
 
   const canFinalize = session.status === "RECORDING";
   const isDraft = session.status === "DRAFT";
+  const aiFeedbacks = feedbacks.filter((f) => isAiFeedbackType(f.feedbackType));
 
   return (
     <div className="space-y-6">
@@ -478,58 +531,55 @@ export default function SessionDetailPage({
       {isDraft && (
         <p className="flex items-start gap-2 rounded-lg border border-dashed bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
           <Info className="mt-0.5 size-4 shrink-0" />
-          Esta sesión está en <strong className="font-medium text-foreground mx-1">borrador</strong>.
-          El flujo de análisis se dispara desde{" "}
-          <Link href="/coach" className="font-medium text-foreground underline underline-offset-4">Coach</Link>.
+          Grabá tu práctica abajo. Al detener, el <strong className="font-medium text-foreground mx-1">coach IA</strong> analiza
+          muletillas, ritmo y fluidez, y el feedback aparece en esta misma página.
         </p>
       )}
 
       {/* Cámara + Transcripción */}
-      <CameraPanel />
+      <CameraPanel onPracticeComplete={handlePracticeComplete} />
 
-      {/* Feedback */}
+      {/* Feedback del coach IA */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Feedback</CardTitle>
-          <CardDescription>Notas y comentarios de la sesión</CardDescription>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Sparkles className="size-4 text-primary" />
+                Feedback del coach IA
+              </CardTitle>
+              <CardDescription>
+                Retroalimentación automática sobre tu oratoria (no es un formulario manual).
+              </CardDescription>
+            </div>
+            {overallScore !== null && (
+              <Badge className="text-sm px-3 py-1">{overallScore}/100</Badge>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {feedbacks.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Sin feedback todavía.</p>
+          {aiFeedbacks.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Todavía no hay análisis. Grabá una práctica arriba y el coach IA te dará consejos
+              personalizados al detener.
+            </p>
           ) : (
             <ul className="space-y-3">
-              {feedbacks.map((f) => (
-                <li key={f.id} className="rounded-md border p-3">
-                  <div className="mb-1 flex items-center gap-2">
-                    <Badge variant="secondary">{f.feedbackType}</Badge>
+              {aiFeedbacks.map((f) => (
+                <li key={f.id} className="rounded-lg border border-primary/10 bg-primary/5 p-4">
+                  <div className="mb-2 flex items-center gap-2">
+                    <Badge variant="secondary">
+                      {AI_FEEDBACK_LABELS[f.feedbackType] ?? f.feedbackType}
+                    </Badge>
                     <span className="text-xs text-muted-foreground">
                       {formatDateTime(f.createdAt)}
                     </span>
                   </div>
-                  <p className="text-sm">{f.content}</p>
+                  <p className="text-sm leading-relaxed">{f.content}</p>
                 </li>
               ))}
             </ul>
           )}
-
-          <Separator />
-
-          <form onSubmit={onAddFeedback} className="space-y-3">
-            <div className="grid gap-3 sm:grid-cols-[180px_1fr]">
-              <div className="space-y-2">
-                <Label htmlFor="feedbackType">Tipo</Label>
-                <Input id="feedbackType" name="feedbackType" defaultValue="general" />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="content">Comentario</Label>
-                <Input id="content" name="content" required placeholder="Escribe un comentario…" />
-              </div>
-            </div>
-            <Button type="submit" variant="outline" disabled={savingFb}>
-              {savingFb ? <Loader2 className="size-4 animate-spin" /> : <MessageSquarePlus className="size-4" />}
-              Agregar feedback
-            </Button>
-          </form>
         </CardContent>
       </Card>
     </div>
