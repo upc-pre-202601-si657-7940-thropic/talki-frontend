@@ -10,30 +10,19 @@ import {
   Loader2,
   Mic,
   MicOff,
-  Sparkles,
   Video,
   VideoOff,
 } from "lucide-react";
 import { coach, sessions } from "@/lib/api/services";
 import { ApiError } from "@/lib/api/client";
 import type { Feedback, Session } from "@/lib/api/types";
-import {
-  AI_FEEDBACK_LABELS,
-  analyzePractice,
-  isAiFeedbackType,
-} from "@/lib/coach/aiFeedback";
+import { analyzePractice, isAiFeedbackType } from "@/lib/coach/aiFeedback";
+import { AiFeedbackPanel } from "@/components/ai-feedback-panel";
 import { formatDateTime, STATUS_LABEL, STATUS_VARIANT } from "@/lib/format";
 import { useUser } from "@/components/user-context";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import {
   getSpeechRecognition,
@@ -539,49 +528,16 @@ export default function SessionDetailPage({
       {/* Cámara + Transcripción */}
       <CameraPanel onPracticeComplete={handlePracticeComplete} />
 
-      {/* Feedback del coach IA */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <Sparkles className="size-4 text-primary" />
-                Feedback del coach IA
-              </CardTitle>
-              <CardDescription>
-                Retroalimentación automática sobre tu oratoria (no es un formulario manual).
-              </CardDescription>
-            </div>
-            {overallScore !== null && (
-              <Badge className="text-sm px-3 py-1">{overallScore}/100</Badge>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {aiFeedbacks.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Todavía no hay análisis. Grabá una práctica arriba y el coach IA te dará consejos
-              personalizados al detener.
-            </p>
-          ) : (
-            <ul className="space-y-3">
-              {aiFeedbacks.map((f) => (
-                <li key={f.id} className="rounded-lg border border-primary/10 bg-primary/5 p-4">
-                  <div className="mb-2 flex items-center gap-2">
-                    <Badge variant="secondary">
-                      {AI_FEEDBACK_LABELS[f.feedbackType] ?? f.feedbackType}
-                    </Badge>
-                    <span className="text-xs text-muted-foreground">
-                      {formatDateTime(f.createdAt)}
-                    </span>
-                  </div>
-                  <p className="text-sm leading-relaxed">{f.content}</p>
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
+      <AiFeedbackPanel
+        items={aiFeedbacks.map((f) => ({
+          feedbackType: f.feedbackType,
+          label: f.feedbackType,
+          content: f.content,
+          createdAt: formatDateTime(f.createdAt),
+        }))}
+        overallScore={overallScore}
+        emptyMessage="Todavía no hay análisis. Grabá una práctica arriba y el coach IA te dará consejos personalizados al detener."
+      />
     </div>
   );
 }

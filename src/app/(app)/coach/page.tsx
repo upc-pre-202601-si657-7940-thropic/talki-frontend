@@ -2,16 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Mic, Send } from "lucide-react";
+import { Loader2, Mic } from "lucide-react";
 import { coach } from "@/lib/api/services";
 import { ApiError } from "@/lib/api/client";
 import type { CoachModes } from "@/lib/api/types";
-import { LiveRecorder } from "@/components/live-recorder";
+import { analyzePractice, type AiFeedbackItem } from "@/lib/coach/aiFeedback";
+import { LiveRecorder, type PracticeCompletePayload } from "@/components/live-recorder";
+import { AiFeedbackPanel } from "@/components/ai-feedback-panel";
 import { useUser } from "@/components/user-context";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Card,
@@ -32,7 +31,9 @@ export default function CoachPage() {
   const user = useUser();
   const [modes, setModes] = useState<CoachModes | null>(null);
   const [selected, setSelected] = useState<string>("quick_practice");
-  const [sending, setSending] = useState(false);
+  const [aiItems, setAiItems] = useState<AiFeedbackItem[]>([]);
+  const [overallScore, setOverallScore] = useState<number | null>(null);
+  const [lastAnalyzedAt, setLastAnalyzedAt] = useState<string | null>(null);
 
   useEffect(() => {
     coach
@@ -47,33 +48,38 @@ export default function CoachPage() {
       });
   }, []);
 
-  async function onFinalize(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const form = new FormData(e.currentTarget);
+  async function handlePracticeComplete({
+    transcript,
+    durationSeconds,
+    wordsPerMinute,
+  }: PracticeCompletePayload) {
+    const analysis = analyzePractice(transcript, durationSeconds);
+    setAiItems(analysis.items);
+    setOverallScore(analysis.scores.overall);
+    setLastAnalyzedAt(
+      new Date().toLocaleString("es-PE", {
+        dateStyle: "short",
+        timeStyle: "short",
+      }),
+    );
+
     const sessionId =
       typeof crypto !== "undefined" && "randomUUID" in crypto
         ? crypto.randomUUID()
         : `sess-${Date.now()}`;
-    setSending(true);
-    try {
-      await coach.finalize(sessionId, {
-        userId: user.userId,
-        mode: selected,
-        transcriptGemini: String(form.get("transcript") || ""),
-        wordsPerMinute: Number(form.get("wpm") || 0),
-        durationSeconds: Number(form.get("duration") || 300),
-        silenceRatio: 0,
-        volumeRmsAvg: 0,
-        academicSegment: "ciclos_6_10",
-      });
-      toast.success("Sesión enviada a análisis (fillers → scoring → progreso)");
-      (e.currentTarget as HTMLFormElement).reset();
-    } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "No se pudo finalizar la sesión";
-      toast.error(msg);
-    } finally {
-      setSending(false);
-    }
+
+    await coach.finalize(sessionId, {
+      userId: user.userId,
+      mode: selected,
+      transcriptGemini: transcript,
+      wordsPerMinute: wordsPerMinute || analysis.wordsPerMinute,
+      durationSeconds: durationSeconds || analysis.durationSeconds,
+      silenceRatio: 0,
+      volumeRmsAvg: 0,
+      academicSegment: "ciclos_6_10",
+    });
+
+    toast.success("Feedback del coach IA listo");
   }
 
   return (
@@ -114,60 +120,28 @@ export default function CoachPage() {
         <CardHeader>
           <CardTitle className="text-base">Conversación en vivo</CardTitle>
           <CardDescription>
-            Usá el grabador flotante (abajo a la derecha) para conversar por voz con el
-            coach de IA en modo <strong>{MODE_LABEL[selected] ?? selected}</strong>. Al
-            detener, tu intervención se transcribe y se envía sola a análisis.
+            Usá el grabador flotante (abajo a la derecha) para practicar en modo{" "}
+            <strong>{MODE_LABEL[selected] ?? selected}</strong>. Al detener, el coach IA
+            analiza tu intervención y el feedback aparece abajo.
           </CardDescription>
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground">
-          Requiere permitir cámara y micrófono. Si el coach de IA no está disponible, se
-          usa la transcripción local del navegador.
+          Requiere cámara y micrófono (Chrome o Edge recomendado). Si Gemini Live no está
+          disponible, se usa transcripción local y el mismo análisis de muletillas y ritmo.
         </CardContent>
       </Card>
 
-      {/* Grabador flotante con conversación de IA + análisis automático. */}
-      <LiveRecorder mode={selected} />
+      <LiveRecorder mode={selected} onPracticeComplete={handlePracticeComplete} />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Envío manual (alternativa)</CardTitle>
-          <CardDescription>
-            Si preferís, escribí la transcripción y métricas a mano para disparar el
-            análisis de muletillas y puntaje.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={onFinalize} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="transcript">Transcripción</Label>
-              <Input
-                id="transcript"
-                name="transcript"
-                placeholder="Eh… bueno, este… mi proyecto trata sobre…"
-                required
-              />
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="wpm">Palabras por minuto</Label>
-                <Input id="wpm" name="wpm" type="number" min={0} defaultValue={120} />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="duration">Duración (segundos)</Label>
-                <Input id="duration" name="duration" type="number" min={1} defaultValue={300} />
-              </div>
-            </div>
-            <Button type="submit" disabled={sending}>
-              {sending ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Send className="size-4" />
-              )}
-              Enviar a análisis ({MODE_LABEL[selected] ?? selected})
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+      <AiFeedbackPanel
+        items={aiItems.map((item) => ({
+          ...item,
+          createdAt:
+            item.feedbackType === "ai_resumen" ? (lastAnalyzedAt ?? undefined) : undefined,
+        }))}
+        overallScore={overallScore}
+        emptyMessage="Usá el grabador flotante para practicar. Al detener, el coach IA te dará consejos personalizados acá."
+      />
     </div>
   );
 }

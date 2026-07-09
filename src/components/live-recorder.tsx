@@ -33,7 +33,19 @@ function formatTime(s: number) {
   return `${m}:${sec}`;
 }
 
-export function LiveRecorder({ mode = "quick_practice" }: { mode?: string }) {
+export interface PracticeCompletePayload {
+  transcript: string;
+  durationSeconds: number;
+  wordsPerMinute: number;
+}
+
+export function LiveRecorder({
+  mode = "quick_practice",
+  onPracticeComplete,
+}: {
+  mode?: string;
+  onPracticeComplete?: (payload: PracticeCompletePayload) => Promise<void>;
+}) {
   const user = useUser();
   const live = useGeminiLive();
 
@@ -184,26 +196,33 @@ export function LiveRecorder({ mode = "quick_practice" }: { mode?: string }) {
       return;
     }
 
-    // Dispara el pipeline de análisis (muletillas → scoring → progreso).
     setSending(true);
     try {
-      const sessionId =
-        typeof crypto !== "undefined" && "randomUUID" in crypto
-          ? crypto.randomUUID()
-          : `sess-${Date.now()}`;
-      await coach.finalize(sessionId, {
-        userId: user.userId,
-        mode,
-        transcriptGemini: finalTranscript,
-        wordsPerMinute: finalWpm,
-        durationSeconds: finalDuration,
-        silenceRatio: 0,
-        volumeRmsAvg: 0,
-        academicSegment: "ciclos_6_10",
-      });
-      toast.success("Sesión enviada a análisis (muletillas → scoring → progreso)");
+      if (onPracticeComplete) {
+        await onPracticeComplete({
+          transcript: finalTranscript,
+          durationSeconds: finalDuration,
+          wordsPerMinute: finalWpm,
+        });
+      } else {
+        const sessionId =
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `sess-${Date.now()}`;
+        await coach.finalize(sessionId, {
+          userId: user.userId,
+          mode,
+          transcriptGemini: finalTranscript,
+          wordsPerMinute: finalWpm,
+          durationSeconds: finalDuration,
+          silenceRatio: 0,
+          volumeRmsAvg: 0,
+          academicSegment: "ciclos_6_10",
+        });
+        toast.success("Sesión enviada a análisis (muletillas → scoring → progreso)");
+      }
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "No se pudo enviar la sesión a análisis";
+      const msg = err instanceof ApiError ? err.message : "No se pudo completar el análisis";
       toast.error(msg);
     } finally {
       setSending(false);
