@@ -41,7 +41,7 @@ function formatTime(s: number) {
 
 // ─── CameraPanel ────────────────────────────────────────────────────────────
 
-type RecState = "idle" | "recording" | "stopped";
+type RecState = "idle" | "recording" | "paused" | "stopped";
 
 function CameraPanel({
   onPracticeComplete,
@@ -95,6 +95,44 @@ function CameraPanel({
     };
   }, [stopTimer]);
 
+  const startRecognition = useCallback(() => {
+    const SR = getSpeechRecognition();
+    if (!SR) return;
+    const recognition = new SR();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "es-ES";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    recognition.onresult = (event: any) => {
+      let finalChunk = "";
+      let interimChunk = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const r = event.results[i];
+        if (r.isFinal) finalChunk += r[0].transcript;
+        else interimChunk += r[0].transcript;
+      }
+      if (finalChunk) {
+        transcriptAccRef.current += finalChunk + " ";
+        setTranscript(transcriptAccRef.current);
+        interimRef.current = "";
+        setInterim("");
+      } else {
+        interimRef.current = interimChunk;
+        setInterim(interimChunk);
+      }
+    };
+    recognition.onerror = (event) => {
+      if (event.error !== "aborted") {
+        toast.warning(speechErrorMessage(event.error));
+      }
+    };
+    recognition.onend = () => {
+      if (recognitionRef.current === recognition) recognition.start();
+    };
+    recognition.start();
+    recognitionRef.current = recognition;
+  }, []);
+
   async function startRecording() {
     if (!isWebSpeechAvailable()) {
       toast.error("La transcripción en vivo requiere Chrome o Edge (Web Speech API).");
@@ -127,48 +165,33 @@ function CameraPanel({
       }
     }
 
-    const SR = getSpeechRecognition();
-    if (SR) {
-      const recognition = new SR();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = "es-ES";
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      recognition.onresult = (event: any) => {
-        let finalChunk = "";
-        let interimChunk = "";
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const r = event.results[i];
-          if (r.isFinal) finalChunk += r[0].transcript;
-          else interimChunk += r[0].transcript;
-        }
-        if (finalChunk) {
-          transcriptAccRef.current += finalChunk + " ";
-          setTranscript(transcriptAccRef.current);
-          interimRef.current = "";
-          setInterim("");
-        } else {
-          interimRef.current = interimChunk;
-          setInterim(interimChunk);
-        }
-      };
-      recognition.onerror = (event) => {
-        if (event.error !== "aborted") {
-          toast.warning(speechErrorMessage(event.error));
-        }
-      };
-      recognition.onend = () => {
-        if (recognitionRef.current === recognition) recognition.start();
-      };
-      recognition.start();
-      recognitionRef.current = recognition;
-    }
-
+    startRecognition();
     timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
     setRecState("recording");
   }
 
-  async function stopRecording() {
+  function pauseRecording() {
+    const merged = mergeInterimTranscript(transcriptAccRef.current, interimRef.current);
+    if (merged !== transcriptAccRef.current) {
+      transcriptAccRef.current = merged;
+      setTranscript(merged);
+    }
+    interimRef.current = "";
+    setInterim("");
+
+    recognitionRef.current?.stop();
+    recognitionRef.current = null;
+    stopTimer();
+    setRecState("paused");
+  }
+
+  function resumeRecording() {
+    startRecognition();
+    timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
+    setRecState("recording");
+  }
+
+  async function finishRecording() {
     const merged = mergeInterimTranscript(transcriptAccRef.current, interimRef.current);
     if (merged !== transcriptAccRef.current) {
       transcriptAccRef.current = merged;
@@ -187,7 +210,7 @@ function CameraPanel({
 
     const text = merged.trim();
     if (!text) {
-      toast.warning("No se detectó voz. Hablá unos segundos antes de detener.");
+      toast.warning("No se detectó voz. Hablá unos segundos antes de terminar.");
       return;
     }
 
@@ -227,11 +250,41 @@ function CameraPanel({
             </div>
           )}
 
-          {/* Indicador REC */}
-          {recState === "recording" && (
+          {/* Indicador REC / PAUSA */}
+          {(recState === "recording" || recState === "paused") && (
             <div className="absolute top-3 left-3 flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-1 backdrop-blur-sm">
-              <span className="size-2 rounded-full bg-destructive animate-pulse" />
-              <span className="text-xs font-semibold text-white">REC · {formatTime(elapsed)}</span>
+              <span
+                className={cn(
+                  "size-2 rounded-full",
+                  recState === "recording" ? "bg-destructive animate-pulse" : "bg-amber-400"
+                )}
+              />
+              <span className="text-xs font-semibold text-white">
+                {recState === "recording" ? "REC" : "PAUSA"} · {formatTime(elapsed)}
+              </span>
+            </div>
+          )}
+
+          {/* Overlay pausado */}
+          {recState === "paused" && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/40 backdrop-blur-[2px]">
+              <span className="text-white font-medium">Grabación en pausa · {formatTime(elapsed)}</span>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={resumeRecording}
+                  className="flex items-center gap-2 rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary/90 transition-colors"
+                >
+                  <Mic className="size-4" /> Reanudar
+                </button>
+                <button
+                  type="button"
+                  onClick={finishRecording}
+                  className="flex items-center gap-2 rounded-full bg-destructive px-5 py-2.5 text-sm font-semibold text-destructive-foreground hover:bg-destructive/90 transition-colors"
+                >
+                  <MicOff className="size-4" /> Terminar
+                </button>
+              </div>
             </div>
           )}
 
@@ -269,15 +322,45 @@ function CameraPanel({
 
         {/* Controles */}
         <div className="flex items-center gap-3">
-          {recState === "recording" ? (
-            <button
-              type="button"
-              onClick={stopRecording}
-              className="flex items-center gap-2 rounded-lg bg-destructive px-4 py-2.5 text-sm font-semibold text-destructive-foreground hover:bg-destructive/90 transition-colors"
-            >
-              <MicOff className="size-4" /> Detener grabación
-            </button>
-          ) : (
+          {recState === "recording" && (
+            <>
+              <button
+                type="button"
+                onClick={pauseRecording}
+                className="flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-500/90 transition-colors"
+              >
+                <MicOff className="size-4" /> Pausar
+              </button>
+              <button
+                type="button"
+                onClick={finishRecording}
+                className="flex items-center gap-2 rounded-lg bg-destructive px-4 py-2.5 text-sm font-semibold text-destructive-foreground hover:bg-destructive/90 transition-colors"
+              >
+                <MicOff className="size-4" /> Terminar
+              </button>
+            </>
+          )}
+
+          {recState === "paused" && (
+            <>
+              <button
+                type="button"
+                onClick={resumeRecording}
+                className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors"
+              >
+                <Mic className="size-4" /> Reanudar
+              </button>
+              <button
+                type="button"
+                onClick={finishRecording}
+                className="flex items-center gap-2 rounded-lg bg-destructive px-4 py-2.5 text-sm font-semibold text-destructive-foreground hover:bg-destructive/90 transition-colors"
+              >
+                <MicOff className="size-4" /> Terminar
+              </button>
+            </>
+          )}
+
+          {(recState === "idle" || recState === "stopped") && (
             <button
               type="button"
               onClick={startRecording}
@@ -313,6 +396,12 @@ function CameraPanel({
               Escuchando
             </span>
           )}
+          {recState === "paused" && (
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="size-1.5 rounded-full bg-amber-400" />
+              En pausa
+            </span>
+          )}
         </div>
 
         <div
@@ -331,9 +420,11 @@ function CameraPanel({
                 ? "Iniciá la grabación para ver la transcripción en tiempo real…"
                 : recState === "recording"
                   ? "Hablá y verás el texto aparecer acá…"
-                  : transcript
-                    ? "Grabación detenida."
-                    : "No se captó texto. Probá de nuevo en Chrome/Edge, hablando 5–10 s."}
+                  : recState === "paused"
+                    ? "En pausa. Presioná Reanudar para seguir hablando."
+                    : transcript
+                      ? "Grabación detenida."
+                      : "No se captó texto. Probá de nuevo en Chrome/Edge, hablando 5–10 s."}
             </p>
           )}
         </div>
